@@ -17,29 +17,29 @@
 #define b(R,C) b[ROWMJR(R,C,nn,n)]
 #define MAIN_PROCESS 0
 #define SEND_NUM_TAG 0
-#define SEND_DISPLS_TAG 1
+#define SEND_OFFSET_TAG 1
 #define SEND_ELEMNTS_TAG 2
 #define SEND_WEIGHT_TAG 3
 #define SEND_COUNTS_TAG 4
 #define SEND_RESULT_TAG 5
 
-struct float_int {
-    float l;
-    int u;
-};
-
-static void calculate_offset(int ** offset, int ** nlocal, int npe, int n) {
+static void calculate_offset(
+    int ** offset, /* offset[i]: starting vertex that the ith compute node is responsible for */ 
+    int ** nlocal, /* nlocal[i]: the number of vertices the ith compute node is responsible for */ 
+    int npe, /* Number of compute nodes */ 
+    int n /* Number of vertices in the graph */ 
+    ) {
     int local, remainder;
     if (n < npe) {
         local = 1;
         *nlocal = malloc(npe * sizeof(int));
         int i = 0;
         for (; i < n; i++) {
-            *(*nlocal + i) = local;
+            *(*nlocal + i) = local; /* nlocal[i] = local */ 
         }
 
         for (; i < npe; i++) {
-            *(*nlocal + i) = 0;
+            *(*nlocal + i) = 0; /* nlocal[i] = 0 */ 
         }
     } else {
         local = n / npe;
@@ -54,12 +54,13 @@ static void calculate_offset(int ** offset, int ** nlocal, int npe, int n) {
 
     *offset = malloc(npe * sizeof(int));
     for (int i = 0; i < npe; i++) {
-        *(*offset + i) = 0;
+        *(*offset + i) = 0; /* offset[i] = 0 */ 
         for (int j = 0; j < i; j++) {
-            *(*offset + i) += *(*nlocal + j);
+            *(*offset + i) += *(*nlocal + j); /* offset[i] += nlocal[j] */ 
         }
     }
 }
+
 static void
 read_file_and_send(
         char const * const filename,
@@ -94,7 +95,7 @@ read_file_and_send(
     for (i = 1; i < npe; i++) {
         a = malloc(n * *(*nlocal + i) * sizeof(float));
         MPI_Send(&n, 1, MPI_INTEGER, i, SEND_NUM_TAG, MPI_COMM_WORLD);
-        MPI_Send(*offset, npe, MPI_INTEGER, i, SEND_DISPLS_TAG, MPI_COMM_WORLD);
+        MPI_Send(*offset, npe, MPI_INTEGER, i, SEND_OFFSET_TAG, MPI_COMM_WORLD);
         MPI_Send(*nlocal, npe, MPI_INTEGER, i, SEND_ELEMNTS_TAG, MPI_COMM_WORLD);
 
         for (j = 0; j < *(* nlocal + i) * n; j++) {
@@ -127,8 +128,7 @@ recv_values_from_master(
     float *a = NULL; 
     MPI_Recv(&n, 1, MPI_INTEGER, 0, SEND_NUM_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     *offset = malloc(npe * sizeof(int));
-    MPI_Recv(*offset, npe, MPI_INTEGER, MAIN_PROCESS, SEND_DISPLS_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    // MPI_Recv(*displs, numberOfProcessors, MPI_INTEGER, MAIN_PROCESS, SEND_DISPLS_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    MPI_Recv(*offset, npe, MPI_INTEGER, MAIN_PROCESS, SEND_OFFSET_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     *nlocal = malloc(npe * sizeof(int)); 
     MPI_Recv(*nlocal, npe, MPI_INTEGER, MAIN_PROCESS, SEND_ELEMNTS_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE); 
     MPI_Recv(&count, 1, MPI_INTEGER, MAIN_PROCESS, SEND_COUNTS_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -146,9 +146,9 @@ dijkstra(
         float const * const a, // Adjacency matrix
         float **const lp, // Result
         int rank, 
-        int * offset, 
-        int * nlocal, 
-        int npe
+        int * offset, /* offset[i]: starting vertex that the ith compute node is responsible for */ 
+        int * nlocal, /* nlocal[i]: the number of vertices the ith compute node is responsible for */ 
+        int npe /* Number of compute nodes */ 
 )
 {
     int i, j, source_node = 0; 
@@ -157,35 +157,39 @@ dijkstra(
         int u;
     } min;
     
-    char * m; /* Marker for visited */
+    char * m; /* m[i] == 1: i is visited */
     float *l = NULL;
     float *local_result = NULL;
 
     m = calloc(n, sizeof(*m));
     assert(m);
-
     l = malloc(n * sizeof(float)); 
     assert(l); 
     local_result = malloc(n * sizeof(float)); 
     assert(local_result);  
 
+    //TODO: Refactor to have source_node sent from main process to all other processes 
+    //TODO: Refactor to have only specific offset and nlocal sent to all processes 
     for (i = 0; i < npe; i++) {
+        /* Find the compute node that has the source vertex */ 
         if (s < offset[i]) {
             source_node = i - 1; 
             break; 
         }
     }
 
+    /* If I (this compute node) has the source vertex */
     if (rank == source_node) {
         for (i = 0; i < n; i++) {
-            l[i] = a[i + n * (s - offset[source_node])]; 
+            /* Initialize distances to the distance from source to all other vertices */ 
+            l[i] = a((s - offset[source_node]), i); 
         }
     }
-
-    MPI_Bcast(l, n, MPI_FLOAT, source_node, MPI_COMM_WORLD);
+    
+    MPI_Bcast(l, n, MPI_FLOAT, source_node, MPI_COMM_WORLD); /* Broadcast from source node to all others */ 
     MPI_Barrier(MPI_COMM_WORLD); 
 
-    m[s] = 1; 
+    m[s] = 1; /* source vertex visited */ 
     min.u = -1; 
 
     for (i = 1; i < n; i++) {
@@ -201,12 +205,15 @@ dijkstra(
         m[min.u] = 1; 
         for (j = 0; j < nlocal[rank]; j++) {
             if (m[j + offset[rank]]) {
+                /* If already visited */ 
                 continue;
             }
+            /* If a shorter path is found */ 
             if (a(j, min.u) + min.l < local_result[j + offset[rank]]) {
                 local_result[j + offset[rank]] = a(j, min.u) + min.l;
             }
         }
+        /* Send out local_result for MIN reduction. Final result is received in l */ 
         MPI_Allreduce(local_result, l, n, MPI_FLOAT, MPI_MIN, MPI_COMM_WORLD); 
         MPI_Barrier(MPI_COMM_WORLD); 
     }
