@@ -57,10 +57,10 @@ load(
 
 static void
 dijkstra(
-  int const s,
-  int const n,
-  float const * const a,
-  float ** const lp
+  int const s, // Source
+  int const n, // Number of nodes
+  float const * const a, // Adjacency matrix
+  float ** const lp // Result
 )
 {
   int i, j;
@@ -68,7 +68,9 @@ dijkstra(
     float l;
     int u;
   } min;
+  /* m keeps track of visited. m[v] == 1 => v has been visited and no longer in the queue */
   char * m;
+  /* l[v]: distance of source to v */
   float * l;
 
   m = calloc(n, sizeof(*m));
@@ -78,16 +80,18 @@ dijkstra(
   assert(l);
 
   for (i=0; i<n; ++i) {
-    l[i] = a(i,s);
+    l[i] = a(i,s); /* Initialize l[v] */
   }
 
-  m[s] = 1;
+
+  m[s] = 1; /* Source is visited. */
   min.u = -1; /* avoid compiler warning */
 
   for (i=1; i<n; ++i) {
     min.l = INFINITY;
 
-    /* find local minimum */
+    /* find local minimum
+     * Find j such that j is the smallest among l and not yet visited */
     for (j=0; j<n; ++j) {
       if (!m[j] && l[j] < min.l) {
         min.l = l[j];
@@ -95,8 +99,11 @@ dijkstra(
       }
     }
 
-    m[min.u] = 1;
+    m[min.u] = 1; /* Mark the j found in the prior for loop as visited */
 
+    /*
+     * Find alternative routes to minimize l[j]
+     */
     for (j=0; j<n; ++j) {
       if (!m[j] && min.l+a(j,min.u) < l[j])
         l[j] = min.l+a(j,min.u);
