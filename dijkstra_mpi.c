@@ -17,48 +17,38 @@
 #define b(R,C) b[ROWMJR(R,C,nn,n)]
 #define MAIN_PROCESS 0
 #define SEND_NUM_TAG 0
-#define SEND_OFFSET_TAG 1
-#define SEND_ELEMNTS_TAG 2
 #define SEND_WEIGHT_TAG 3
 #define SEND_COUNTS_TAG 4
 #define SEND_RESULT_TAG 5
 
-static void calculate_offset(
-    int ** offset, /* offset[i]: starting vertex that the ith compute node is responsible for */ 
-    int ** nlocal, /* nlocal[i]: the number of vertices the ith compute node is responsible for */ 
-    int npe, /* Number of compute nodes */ 
-    int n /* Number of vertices in the graph */ 
-    ) {
-    int local, remainder;
-    if (n < npe) {
-        local = 1;
-        *nlocal = malloc(npe * sizeof(int));
-        int i = 0;
-        for (; i < n; i++) {
-            *(*nlocal + i) = local; /* nlocal[i] = local */ 
-        }
-
-        for (; i < npe; i++) {
-            *(*nlocal + i) = 0; /* nlocal[i] = 0 */ 
-        }
-    } else {
-        local = n / npe;
-        remainder = n % npe;
-
-        *nlocal = malloc(npe * sizeof(int));
-        for (int i = 0; i < npe; i++) {
-            *(*nlocal + i) = local;
-        }
-        *(*nlocal + npe - 1) += remainder;
-    }
-
-    *offset = malloc(npe * sizeof(int));
-    for (int i = 0; i < npe; i++) {
-        *(*offset + i) = 0; /* offset[i] = 0 */ 
-        for (int j = 0; j < i; j++) {
-            *(*offset + i) += *(*nlocal + j); /* offset[i] += nlocal[j] */ 
+static int get_chunk_size(int npe, int n, int rank) {
+    if (npe > n) {
+        if (rank > (npe - 1)) {
+            return 0; 
+        } else {
+            return 1; 
         }
     }
+    int chunk_size = n / npe; 
+    int remainder = n % npe; 
+    if (rank == npe - 1) return chunk_size + remainder;
+    else return chunk_size; 
+}
+
+static int get_offset(int npe, int n, int rank) {
+    int chunk_size = n / npe; 
+    return rank * chunk_size; 
+}
+
+static int get_source_node(int npe, int n, int s) {
+    int chunk_size = n / npe; 
+    int i; 
+    for (i = 0; i < npe; i++) {
+        if (s >= i * chunk_size && s < (i + 1) * chunk_size) {
+            return i; 
+        }
+    }
+    return i; 
 }
 
 static void
@@ -66,9 +56,7 @@ read_file_and_send(
         char const * const filename,
         int * const np,
         float ** const ap,
-        int npe,
-        int ** offset,
-        int ** nlocal
+        int npe
 )
 {
     int i, j, n, ret;
@@ -83,22 +71,22 @@ read_file_and_send(
     ret = fscanf(fp, "%d", &n);
     assert(1 == ret);
 
-    calculate_offset(offset, nlocal, npe, n);
-
-    a = malloc(n * *(*nlocal) * sizeof(float));
-    for (j = 0; j < *(* nlocal) * n; j++) {
+    int chunk_size;
+    
+    chunk_size = get_chunk_size(npe, n, 0);
+    a = malloc(n * chunk_size * sizeof(float));
+    for (j = 0; j < chunk_size * n; j++) {
         ret = fscanf(fp, "%f", &a[j]);
         assert(1 == ret);
     }
     *ap = a;
 
     for (i = 1; i < npe; i++) {
-        a = malloc(n * *(*nlocal + i) * sizeof(float));
+        chunk_size = get_chunk_size(npe, n, i);
+        a = malloc(n * chunk_size * sizeof(float));
         MPI_Send(&n, 1, MPI_INTEGER, i, SEND_NUM_TAG, MPI_COMM_WORLD);
-        MPI_Send(*offset, npe, MPI_INTEGER, i, SEND_OFFSET_TAG, MPI_COMM_WORLD);
-        MPI_Send(*nlocal, npe, MPI_INTEGER, i, SEND_ELEMNTS_TAG, MPI_COMM_WORLD);
 
-        for (j = 0; j < *(* nlocal + i) * n; j++) {
+        for (j = 0; j < chunk_size * n; j++) {
             ret = fscanf(fp, "%f", &a[j]);
             assert(1 == ret);
         }
@@ -118,19 +106,12 @@ read_file_and_send(
 static void
 recv_values_from_master(
         int * const np,
-        float ** const ap,
-        int npe,
-        int ** offset,
-        int ** nlocal
+        float ** const ap
 )
 {
     int count, n;
     float *a = NULL; 
     MPI_Recv(&n, 1, MPI_INTEGER, 0, SEND_NUM_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    *offset = malloc(npe * sizeof(int));
-    MPI_Recv(*offset, npe, MPI_INTEGER, MAIN_PROCESS, SEND_OFFSET_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    *nlocal = malloc(npe * sizeof(int)); 
-    MPI_Recv(*nlocal, npe, MPI_INTEGER, MAIN_PROCESS, SEND_ELEMNTS_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE); 
     MPI_Recv(&count, 1, MPI_INTEGER, MAIN_PROCESS, SEND_COUNTS_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     a = malloc(count * sizeof(float)); 
     MPI_Recv(a, count, MPI_FLOAT, MAIN_PROCESS, SEND_WEIGHT_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE); 
@@ -146,12 +127,11 @@ dijkstra(
         float const * const a, // Adjacency matrix
         float **const lp, // Result
         int rank, 
-        int * offset, /* offset[i]: starting vertex that the ith compute node is responsible for */ 
-        int * nlocal, /* nlocal[i]: the number of vertices the ith compute node is responsible for */ 
-        int npe /* Number of compute nodes */ 
+        int npe,  /* Number of compute nodes */ 
+        int source_node
 )
 {
-    int i, j, source_node = 0; 
+    int i, j;//, source_node = 0; 
     struct float_int {
         float l;
         int u;
@@ -168,21 +148,14 @@ dijkstra(
     local_result = malloc(n * sizeof(float)); 
     assert(local_result);  
 
-    //TODO: Refactor to have source_node sent from main process to all other processes 
-    //TODO: Refactor to have only specific offset and nlocal sent to all processes 
-    for (i = 0; i < npe; i++) {
-        /* Find the compute node that has the source vertex */ 
-        if (s < offset[i]) {
-            source_node = i - 1; 
-            break; 
-        }
-    }
+    int chunk_size = get_chunk_size(npe, n, rank); 
+    int offset = get_offset(npe, n, rank); 
 
-    /* If I (this compute node) has the source vertex */
     if (rank == source_node) {
         for (i = 0; i < n; i++) {
             /* Initialize distances to the distance from source to all other vertices */ 
-            l[i] = a((s - offset[source_node]), i); 
+            int source_node_offset = get_offset(npe, n, source_node); 
+            l[i] = a(s - source_node_offset, i); 
         }
     }
     
@@ -203,14 +176,14 @@ dijkstra(
         }
 
         m[min.u] = 1; 
-        for (j = 0; j < nlocal[rank]; j++) {
-            if (m[j + offset[rank]]) {
+        for (j = 0; j < chunk_size; j++) {
+            if (m[j + offset]) {
                 /* If already visited */ 
                 continue;
             }
             /* If a shorter path is found */ 
-            if (a(j, min.u) + min.l < local_result[j + offset[rank]]) {
-                local_result[j + offset[rank]] = a(j, min.u) + min.l;
+            if (a(j, min.u) + min.l < local_result[j + offset]) {
+                local_result[j + offset] = a(j, min.u) + min.l;
             }
         }
         /* Send out local_result for MIN reduction. Final result is received in l */ 
@@ -256,7 +229,6 @@ main(int argc, char ** argv)
     int n, npe, rank;
     double ts, te;
     float * a, * l;
-    int * offset = NULL, *nlocal = NULL; 
     if(argc < 4){
         printf("Invalid number of arguments.\nUsage: dijkstra <graph> <source> <output_file>.\n");
         return EXIT_FAILURE;
@@ -267,15 +239,17 @@ main(int argc, char ** argv)
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
     if (rank == MAIN_PROCESS) {
-        read_file_and_send(argv[1], &n, &a, npe, &offset, &nlocal);
+        read_file_and_send(argv[1], &n, &a, npe);//, &offset, &nlocal);
     } else {
-        recv_values_from_master(&n, &a, npe, &offset, &nlocal);
+        recv_values_from_master(&n, &a);//, npe);//, &offset, &nlocal);
     }
-    
+    int s = atoi(argv[2]); 
+    int source_node = get_source_node(npe, n, s); 
     l = malloc(n*sizeof(*l));
     assert(l);
     ts = MPI_Wtime();
-    dijkstra(atoi(argv[2]), n, a, &l, rank, offset, nlocal, npe);
+    // dijkstra(atoi(argv[2]), n, a, &l, rank, npe);
+    dijkstra(s, n, a, &l, rank, npe, source_node);
     te = MPI_Wtime();
     if (rank == MAIN_PROCESS) {
         print_time(te - ts);
