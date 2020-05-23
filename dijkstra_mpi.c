@@ -15,11 +15,10 @@
 /* define access directions for matrices */
 #define a(R,C) a[ROWMJR(R,C,ln,n)]
 #define b(R,C) b[ROWMJR(R,C,nn,n)]
-#define MAIN_PROCESS 0
-#define SEND_NUM_TAG 0
-#define SEND_WEIGHT_TAG 3
-#define SEND_COUNTS_TAG 4
-#define SEND_RESULT_TAG 5
+
+#define MASTER 0
+#define N_TAG 0
+#define A_TAG 1
 
 static int get_chunk_size(int npe, int n, int rank) {
     if (npe > n) {
@@ -84,15 +83,14 @@ read_file_and_send(
     for (i = 1; i < npe; i++) {
         chunk_size = get_chunk_size(npe, n, i);
         a = malloc(n * chunk_size * sizeof(float));
-        MPI_Send(&n, 1, MPI_INTEGER, i, SEND_NUM_TAG, MPI_COMM_WORLD);
+        MPI_Send(&n, 1, MPI_INTEGER, i, N_TAG, MPI_COMM_WORLD);
 
         for (j = 0; j < chunk_size * n; j++) {
             ret = fscanf(fp, "%f", &a[j]);
             assert(1 == ret);
         }
-
-        MPI_Send(&j, 1, MPI_INTEGER, i, SEND_COUNTS_TAG, MPI_COMM_WORLD);
-        MPI_Send(a, j, MPI_FLOAT, i, SEND_WEIGHT_TAG, MPI_COMM_WORLD);
+        MPI_Send(a, (chunk_size * n), MPI_FLOAT, i, A_TAG, MPI_COMM_WORLD);
+        
         free(a);
     }
 
@@ -106,15 +104,18 @@ read_file_and_send(
 static void
 recv_values_from_master(
         int * const np,
-        float ** const ap
+        float ** const ap,
+        int npe,
+        int rank
 )
 {
-    int count, n;
+    int n;
     float *a = NULL; 
-    MPI_Recv(&n, 1, MPI_INTEGER, 0, SEND_NUM_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    MPI_Recv(&count, 1, MPI_INTEGER, MAIN_PROCESS, SEND_COUNTS_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    a = malloc(count * sizeof(float)); 
-    MPI_Recv(a, count, MPI_FLOAT, MAIN_PROCESS, SEND_WEIGHT_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE); 
+    MPI_Recv(&n, 1, MPI_INTEGER, 0, N_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    
+    int chunk_size = get_chunk_size(npe, n, rank); 
+    a = malloc(n * chunk_size * sizeof(float)); 
+    MPI_Recv(a, (chunk_size * n), MPI_FLOAT, MASTER, A_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE); 
     *ap = a; 
     *np = n; 
     MPI_Barrier(MPI_COMM_WORLD); 
@@ -131,7 +132,7 @@ dijkstra(
         int source_node
 )
 {
-    int i, j;//, source_node = 0; 
+    int i, j;
     struct float_int {
         float l;
         int u;
@@ -238,20 +239,21 @@ main(int argc, char ** argv)
     MPI_Comm_size(MPI_COMM_WORLD, &npe);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-    if (rank == MAIN_PROCESS) {
-        read_file_and_send(argv[1], &n, &a, npe);//, &offset, &nlocal);
+    if (rank == MASTER) {
+        read_file_and_send(argv[1], &n, &a, npe);
     } else {
-        recv_values_from_master(&n, &a);//, npe);//, &offset, &nlocal);
+        recv_values_from_master(&n, &a, npe, rank);
     }
+
     int s = atoi(argv[2]); 
     int source_node = get_source_node(npe, n, s); 
     l = malloc(n*sizeof(*l));
     assert(l);
+
     ts = MPI_Wtime();
-    // dijkstra(atoi(argv[2]), n, a, &l, rank, npe);
     dijkstra(s, n, a, &l, rank, npe, source_node);
     te = MPI_Wtime();
-    if (rank == MAIN_PROCESS) {
+    if (rank == MASTER) {
         print_time(te - ts);
         print_numbers(argv[3], n, l);
     }
