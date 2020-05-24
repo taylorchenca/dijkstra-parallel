@@ -139,15 +139,15 @@ dijkstra(
     } min;
     
     char * m; /* m[i] == 1: i is visited */
-    float *l = NULL;
-    float *local_result = NULL;
+    float *global_l = NULL;
+    float *local_l = NULL;
 
     m = calloc(n, sizeof(*m));
     assert(m);
-    l = malloc(n * sizeof(float)); 
-    assert(l); 
-    local_result = malloc(n * sizeof(float)); 
-    assert(local_result);  
+    global_l = malloc(n * sizeof(float)); 
+    assert(global_l); 
+    local_l = malloc(n * sizeof(float)); 
+    assert(local_l);  
 
     int chunk_size = get_chunk_size(npe, n, rank); 
     int offset = get_offset(npe, n, rank); 
@@ -156,11 +156,11 @@ dijkstra(
         int source_node_offset = get_offset(npe, n, source_node); 
         for (i = 0; i < n; i++) {
             /* Initialize distances to the distance from source to all other vertices */ 
-            l[i] = a(s - source_node_offset, i); 
+            global_l[i] = a(s - source_node_offset, i); 
         }
     }
     
-    MPI_Bcast(l, n, MPI_FLOAT, source_node, MPI_COMM_WORLD); /* Broadcast from source node to all others */ 
+    MPI_Bcast(global_l, n, MPI_FLOAT, source_node, MPI_COMM_WORLD); /* Broadcast from source node to all others */ 
     MPI_Barrier(MPI_COMM_WORLD); 
 
     m[s] = 1; /* source vertex visited */ 
@@ -169,26 +169,26 @@ dijkstra(
     for (i = 1; i < n; i++) {
         min.l = INFINITY;
         for (j = 0; j < n; j++) {
-            if (!m[j] && l[j] < min.l) {
-                min.l = l[j];
+            if (!m[j] && global_l[j] < min.l) {
+                min.l = global_l[j];
                 min.u = j;
             }
-            local_result[j] = l[j]; 
+            local_l[j] = global_l[j]; 
         }
 
         m[min.u] = 1; 
         for (j = 0; j < chunk_size; j++) {
             /* If a shorter path is found */ 
-            if (!m[j + offset] && a(j, min.u) + min.l < local_result[j + offset]) {
-                local_result[j + offset] = a(j, min.u) + min.l;
+            if (!m[j + offset] && a(j, min.u) + min.l < local_l[j + offset]) {
+                local_l[j + offset] = a(j, min.u) + min.l;
             }
         }
-        /* Send out local_result for MIN reduction. Final result is received in l */ 
-        MPI_Allreduce(local_result, l, n, MPI_FLOAT, MPI_MIN, MPI_COMM_WORLD); 
+        /* Send out local_l for MIN reduction. Final result is received in global_l */ 
+        MPI_Allreduce(local_l, global_l, n, MPI_FLOAT, MPI_MIN, MPI_COMM_WORLD); 
         MPI_Barrier(MPI_COMM_WORLD); 
     }
     free(m); 
-    *lp = l; 
+    *lp = global_l; 
 }
 
 static void
