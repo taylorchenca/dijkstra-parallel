@@ -194,7 +194,29 @@ dijkstra(
 static void
 print_time(double const seconds)
 {
-    printf("Search Time: %0.06fs\n", seconds);
+    printf("%0.06fs\n", seconds);
+}
+
+static void
+print_log(        
+    char const * const filename,
+    int const npe,
+    int const n,
+    int const source,
+    double const seconds
+)
+{
+    FILE * fout;
+
+    /* open file */
+    if(NULL == (fout = fopen(filename, "a"))) {
+        fprintf(stderr, "error opening '%s'\n", filename);
+        abort();
+    }
+
+    fprintf(fout, "%d, %d, %d, %0.06fs\n", npe, n, source, seconds);
+    fclose(fout);
+    
 }
 
 static void
@@ -227,7 +249,7 @@ main(int argc, char ** argv)
     double ts, te;
     float * a, * l;
     if(argc < 4){
-        printf("Invalid number of arguments.\nUsage: dijkstra <graph> <source> <output_file>.\n");
+        printf("Invalid number of arguments.\nUsage: dijkstra <graph> <source> <output_file> <log file>.\n");
         return EXIT_FAILURE;
     }
 
@@ -250,6 +272,7 @@ main(int argc, char ** argv)
     dijkstra(s, n, a, &l, rank, npe, source_node);
     te = MPI_Wtime();
     if (rank == MASTER) {
+        print_log(argv[4], npe, n, s, te - ts); 
         print_time(te - ts);
         print_numbers(argv[3], n, l);
     }
