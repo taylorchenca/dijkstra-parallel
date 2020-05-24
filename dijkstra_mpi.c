@@ -124,7 +124,7 @@ recv_values_from_master(
 static void
 dijkstra(
         int const s, // Source
-        int const n, // Number of nodes
+        int const n, // Number of vertices
         float const * const a, // Adjacency matrix
         float **const lp, // Result
         int rank, 
@@ -153,9 +153,9 @@ dijkstra(
     int offset = get_offset(npe, n, rank); 
 
     if (rank == source_node) {
+        int source_node_offset = get_offset(npe, n, source_node); 
         for (i = 0; i < n; i++) {
             /* Initialize distances to the distance from source to all other vertices */ 
-            int source_node_offset = get_offset(npe, n, source_node); 
             l[i] = a(s - source_node_offset, i); 
         }
     }
@@ -164,7 +164,7 @@ dijkstra(
     MPI_Barrier(MPI_COMM_WORLD); 
 
     m[s] = 1; /* source vertex visited */ 
-    min.u = -1; 
+    min.u = -1; /* avoid compiler warning */
 
     for (i = 1; i < n; i++) {
         min.l = INFINITY;
@@ -178,12 +178,8 @@ dijkstra(
 
         m[min.u] = 1; 
         for (j = 0; j < chunk_size; j++) {
-            if (m[j + offset]) {
-                /* If already visited */ 
-                continue;
-            }
             /* If a shorter path is found */ 
-            if (a(j, min.u) + min.l < local_result[j + offset]) {
+            if (!m[j + offset] && a(j, min.u) + min.l < local_result[j + offset]) {
                 local_result[j + offset] = a(j, min.u) + min.l;
             }
         }

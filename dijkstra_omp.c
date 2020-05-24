@@ -84,15 +84,14 @@ dijkstra(
     l = malloc(n*sizeof(*l));
     assert(l);
 
+    #pragma omp parallel for schedule(static) shared(l)
     for (i=0; i<n; ++i) {
         l[i] = a(i,s);
     }
 
     m[s] = 1;
     min.u = -1; /* avoid compiler warning */
-    clock_t ts, te;
-    ts = clock();
-//    #pragma omp parallel for
+    
     for (i=1; i<n; ++i) {
         min.l = INFINITY;
 
@@ -112,10 +111,9 @@ dijkstra(
                 l[j] = min.l+a(j,min.u);
         }
     }
-    te = clock();
-    print_time((double)(te-ts)/CLOCKS_PER_SEC);
+    // te = clock();
+    // print_time((double)(te-ts)/CLOCKS_PER_SEC);
     free(m);
-
     *lp = l;
 }
 
@@ -157,11 +155,11 @@ main(int argc, char ** argv)
 
     load(argv[1], &n, &a);
 
-//    ts = clock();
+   ts = clock();
     dijkstra(atoi(argv[2]), n, a, &l);
-//    te = clock();
+   te = clock();
 
-//    print_time((double)(te-ts)/CLOCKS_PER_SEC);
+   print_time((double)(te-ts)/CLOCKS_PER_SEC);
     print_numbers(argv[3], n, l);
 
     free(a);
